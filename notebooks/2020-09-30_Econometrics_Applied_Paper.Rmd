@@ -1,0 +1,237 @@
+---
+title: "Econometrics III - Applied Paper Analysis"
+author: "Rodrigo Farinha and Vitor Azzari"
+date: "September 2020"
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    latex_engine: xelatex
+---
+```{r echo=TRUE}
+# Load package using a function load_package-----------------------------------------------------------------
+load_package<-function(x){
+  x<-as.character(match.call()[[2]])
+  if (!require(x,character.only=TRUE)){
+    install.packages(pkgs=x,repos="http://cran.r-project.org")
+    require(x,character.only=TRUE)
+  }
+}
+
+load_package('AER')
+load_package('tseries')
+load_package('urca')
+load_package('dlm')
+load_package('openxlsx')
+load_package('xts')
+load_package('class')
+load_package('zoo')
+load_package('fBasics')
+load_package('qrmtools')
+load_package('stats')
+load_package('MTS')
+load_package('vars')
+load_package('graphics')
+load_package('readxl')
+load_package('tsDyn')
+library(tidyverse)
+
+Bauducco_r <- read_xlsx("Bauducco_r.xlsx")
+```
+
+#Data Import
+## Transform in time series
+```{r echo=TRUE}
+SALES <- ts(Bauducco_r$Sales,
+          start = c(2012, 07), 
+          end = c(2015, 12), 
+          frequency = 12)
+
+PRICE <- ts(Bauducco_r$Price,
+            start = c(2012, 07), 
+          end = c(2015, 12), 
+          frequency = 12)
+
+PCV <- ts(Bauducco_r$PCV,
+          start = c(2012, 07), 
+          end = c(2015, 12), 
+          frequency = 12)
+```
+
+### Plot the series
+```{r echo=TRUE}
+plot(cbind(SALES, PRICE, PCV), main = "Time Series Plot Sales, Price and PCV")
+```
+
+### Testing unit root in the series
+```{r echo=TRUE}
+adf.test(SALES)
+adf.test(PRICE)
+adf.test(PCV)
+```
+We can reject the null hypothesis of a unit root in 5% only in Sales series. The PCV can be rejected only in 10% of significance, and the Price series cannot be rejected. Thus, we assuming with caution that PCV and price are integrated.  Now we have to check the order of integration by differencing the series and doing the tests again.
+
+### Testing unit root in the differenced series
+```{r echo=TRUE}
+adf.test(diff(SALES))
+adf.test(diff(diff(PRICE)))
+adf.test(diff(PCV))
+```
+On all three differenced series we were able to reject the null hypothesis of a unit root. Thus, the variables are integrated of order 1. Now we can estimate the statistic regression and assess whether or not it's residuals are stationary.
+
+### Running Linear Regression
+```{r echo=TRUE}
+regressao <- lm(SALES ~ PRICE + PCV)
+summary(regressao)
+```
+
+### Define the equilibrium correction
+```{r echo=TRUE}
+EqCM1 <- resid(regressao)
+
+EqCM <- SALES - regressao$coefficients[2]*PRICE  - regressao$coefficients[3]*PCV
+
+#Plot of EqCM1
+plot(EqCM, type='l', col='steelblue', xlab = "Months")
+```
+
+### ACF for EqCM
+```{r echo=TRUE}
+par(mfrow=c(1,2))
+acf(EqCM1)
+pacf(EqCM1)
+```
+
+### Testing unit root for EqCM
+```{r echo=TRUE}
+adf.test(EqCM1)
+```
+Based on the augmented dickey fuller test results, we can reject the null hypothesis and confirm that the residuals from the regression \(sales_t = \mu + \beta price_t + \beta PCV_t + \epsilon _t\) are stationary.
+
+
+# VAR Model
+
+## VAR lag length selection
+```{r echo=TRUE}
+SALES_DIF1 <- diff(SALES)
+PRICE_DIF2 <- diff(diff(PRICE))
+PCV_DIF1 <- diff(PCV)
+
+data <- cbind(SALES_DIF1, PRICE_DIF2 , PCV_DIF1)
+colnames(data) <- c("SALES", "PRICE", "PCV")
+data <- na.remove(data)
+
+VARselect(data, lag.max = 20, type=c("const"), season = NULL, exog = NULL)
+```
+Using the criteria of the AIC, we can conclude that the optimal lag for this VAR model is 7.
+
+## Model VAR(7)
+```{r echo=TRUE}
+VAR_Baud6 <- VAR(data, p=7, type = "const", season = NULL, exog = NULL)
+summary(VAR_Baud6, equation = "SALES")
+plot(VAR_Baud6)
+```
+
+## Summary of Equations
+### Summary of equation Sales
+```{r echo=TRUE}
+summary(VAR_Baud6, equation = "SALES")
+dev.off()
+plot(VAR_Baud6, names = "SALES")
+```
+
+### Summary of equation Price
+```{r echo=TRUE}
+summary(VAR_Baud6, equation = "PRICE")
+dev.off()
+plot(VAR_Baud6, names = "PRICE")
+```
+
+### Summary of equation PCV
+```{r echo=TRUE}
+summary(VAR_Baud6, equation = "PCV")
+dev.off()
+plot(VAR_Baud6, names = "PCV")
+```
+
+
+## VAR robustness tests
+### Serial Correlation Test (If rejects H0 then there is serial correlation in the errors)
+```{r echo=TRUE}
+ser <- serial.test(VAR_Baud6, lags.pt = 6, type = "PT.asymptotic")
+ser
+```
+
+### Heteroscedasticity (If it rejects H0 then the model suffers from heroscedasticity)
+```{r echo=TRUE}
+arch7 <- arch.test(VAR_Baud6)
+arch7$arch.mul
+```
+
+### Normal Distribution of the Resideuals (If rejects H0 then there the residuals are not normally distributed)
+```{r echo=TRUE}
+norm7 <- normality.test(VAR_Baud6, multivariate.only = TRUE)
+norm7
+```
+
+### Stability
+```{r echo=TRUE}
+cumsum7 <- stability(VAR_Baud6, type = "OLS-CUSUM")
+plot(cumsum7)
+```
+
+# VEC Model
+## Johansen's cointegration test
+```{r echo=TRUE}
+vec_trace <- (ca.jo(log(Bauducco_r), ecdet = "const", type = "trace"))
+vec_eigen <- (ca.jo(log(Bauducco_r), ecdet = "const", type = "eigen"))
+summary(vec_trace)
+summary(vec_eigen)
+```
+Based on the results from trace test and eigenvalue test, it is not possible to reject that there are 2 relations of cointegration on the model.
+
+## Estimating the VECM(6) with two cointegrating vectors
+We can use the function VECM from tsDyn package to estimate the VECM(6) with two cointegrating vectors
+```{r echo=TRUE}
+vec <- VECM(log(Bauducco_r), lag = 6, r = 2, estim = "ML", include = c("none"), LRinclude = c("const"))
+summary(vec)
+```
+## VEC robustness tests
+### Serial Correlation Test (If rejects H0 then there is serial correlation in the errors)
+```{r echo=TRUE}
+ser_vec_t <- serial.test(vec2var(vec_trace), lags.pt = 6, type = "PT.asymptotic")
+ser_vec_t
+```
+
+### Heteroscedasticity (If it rejects H0 then there the model suffers from heroscedasticity)
+```{r echo=TRUE}
+arch_vec <- arch.test(vec2var(vec_trace))
+arch_vec$arch.mul
+```
+
+### Normal Distribution of the Resideuals (If rejects H0 then there the residuals are not normally distributed)
+```{r echo=TRUE}
+norm7 <- normality.test(vec2var(vec_trace), multivariate.only = TRUE)
+norm7
+```
+
+## Granger-causality Test
+```{r echo=TRUE}
+grangertest(sales~price, order=7)
+grangertest(sales~PCV, order=7)
+grangertest(price~sales, order=7)
+grangertest(price~PCV, order=7)
+grangertest(PCV~sales, order=7)
+grangertest(PCV~price, order=7)
+```
+
+### Impulse Response Function
+```{r echo = TRUE}
+irf.sales <- irf(VAR_Baud6, impulse = "PCV", response = "SALES", 
+               n.ahead = 40, boot = TRUE)
+plot(irf.sales, ylab = "ouput", main = "Shock from PCV")
+
+bv.vardec <- fevd(VAR_Baud6, n.ahead = 10)
+plot(bv.vardec)
+```
+
